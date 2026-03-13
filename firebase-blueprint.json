@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "Report": {
+      "title": "Road Damage Report",
+      "description": "A report of road damage detected by the AI.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Type of damage (e.g., pothole, crack, subsidence)."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Estimated severity of the damage."
+        },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          },
+          "description": "GPS coordinates of the damage."
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "URL of the evidence image."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the damage was detected."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["reported", "assigned", "repaired"],
+          "description": "Current status of the repair workflow."
+        },
+        "reportedBy": {
+          "type": "string",
+          "description": "UID of the user who reported it."
+        }
+      },
+      "required": ["type", "severity", "location", "imageUrl", "timestamp", "status", "reportedBy"]
+    },
+    "User": {
+      "title": "User Profile",
+      "description": "User profile information and roles.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["authority", "citizen"],
+          "description": "User role in the system."
+        }
+      },
+      "required": ["email", "role"]
+    }
+  },
+  "firestore": {
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Collection of all road damage reports."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data."
+    }
+  }
+}

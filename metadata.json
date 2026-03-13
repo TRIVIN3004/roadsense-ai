@@ -1,0 +1,8 @@
+{
+  "name": "RoadSense AI",
+  "description": "AI-powered road damage detection and reporting system using computer vision and geotagging.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: reports
+    // Fields:
+    //   - type: string (required)
+    //   - severity: string (required, enum: low, medium, high)
+    //   - location: map (required, lat: number, lng: number)
+    //   - imageUrl: string (required)
+    //   - timestamp: timestamp (required)
+    //   - status: string (required, enum: reported, assigned, repaired)
+    //   - reportedBy: string (required, uid)
+    //
+    // Collection: users
+    // Fields:
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - role: string (required, enum: authority, citizen)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'authority') ||
+         request.auth.token.email == "trivintrivin2005@gmail.com");
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['type', 'severity', 'location', 'imageUrl', 'timestamp', 'status', 'reportedBy']) &&
+             data.type is string && data.type.size() < 100 &&
+             data.severity in ['low', 'medium', 'high'] &&
+             data.location is map && data.location.lat is number && data.location.lng is number &&
+             data.imageUrl is string && data.imageUrl.size() < 2000 &&
+             data.timestamp is timestamp &&
+             data.status in ['reported', 'assigned', 'repaired'] &&
+             data.reportedBy == request.auth.uid;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'role']) &&
+             data.email is string &&
+             data.role in ['authority', 'citizen'];
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'citizen';
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+      allow write: if isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidReport(request.resource.data);
+      allow update: if isAdmin() || (isAuthenticated() && resource.data.reportedBy == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
+      allow delete: if isAdmin();
+    }
+  }
+}
