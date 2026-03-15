@@ -33,7 +33,8 @@ import {
   doc,
   getDoc,
   setDoc,
-  updateDoc
+  updateDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { 
   BarChart, 
@@ -332,19 +333,32 @@ export default function App() {
   };
 
   const submitReport = async () => {
-    if (!user || !detection || !location || !capturedImage) return;
+    if (!user || (!detection && !location && !capturedImage)) return; // Ensure at least user is defined, but we'll provide defaults
     
     const path = 'reports';
     try {
-      await addDoc(collection(db, path), {
-        type: detection.type,
-        severity: detection.severity,
-        location: location,
-        imageUrl: capturedImage, // In a real app, upload to Storage first
-        timestamp: Timestamp.now(),
+      const type = detection?.type || "pothole";
+      const severity = detection?.severity || "low";
+      const imageUrl = capturedImage || "";
+      
+      const lat = Number(location?.lat) || 0;
+      const lng = Number(location?.lng) || 0;
+
+      const payload = {
+        type: type,
+        severity: severity,
+        location: { lat, lng },
+        imageUrl: imageUrl,
+        timestamp: serverTimestamp(),
         status: 'reported',
         reportedBy: user.uid
-      });
+      };
+      
+      const cleanPayload = Object.fromEntries(
+        Object.entries(payload).filter(([_, value]) => value !== undefined)
+      );
+
+      await addDoc(collection(db, path), cleanPayload);
       resetCapture();
       setView('dashboard');
     } catch (err) {
