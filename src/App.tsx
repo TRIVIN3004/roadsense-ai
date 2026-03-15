@@ -54,6 +54,13 @@ import {
 import { auth, db } from './firebase';
 import { detectRoadDamage, DetectionResult } from './services/ai';
 import { cn } from './lib/utils';
+import { 
+  GoogleMap, 
+  useLoadScript, 
+  Marker, 
+  InfoWindow, 
+  MarkerClusterer 
+} from '@react-google-maps/api';
 
 // --- Types ---
 
@@ -209,8 +216,60 @@ export default function App() {
   const [activeAlert, setActiveAlert] = useState<Report | null>(null);
   const [selectedMarker, setSelectedMarker] = useState<Report | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // --- Maps Setup ---
+  const { isLoaded: isMapLoaded } = useLoadScript({
+    googleMapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || "", // Ensure you have this in your .env
+    libraries: ['visualization']
+  });
+
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const [heatmapLayer, setHeatmapLayer] = useState<google.maps.visualization.HeatmapLayer | null>(null);
+
+  useEffect(() => {
+    if (view === 'map' && isMapLoaded && mapRef.current && reports.length > 0) {
+      if (heatmapLayer) heatmapLayer.setMap(null); // Clear old
+
+      const heatData = reports.map(r => new window.google.maps.LatLng(r.location.lat, r.location.lng));
+      
+      const newLayer = new window.google.maps.visualization.HeatmapLayer({
+        data: heatData,
+        radius: 40,
+        opacity: 0.6,
+      });
+
+      newLayer.setMap(mapRef.current);
+      setHeatmapLayer(newLayer);
+    }
+  }, [view, isMapLoaded, reports]);
+
+  // Map theme
+  const mapStyles = [
+    { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
+    { elementType: "labels.text.fill", stylers: [{ color: "#746855" }] },
+    { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] },
+    { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+    { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#d59563" }] },
+    { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#263c3f" }] },
+    { featureType: "poi.park", elementType: "labels.text.fill", stylers: [{ color: "#6b9a76" }] },
+    { featureType: "road", elementType: "geometry", stylers: [{ color: "#38414e" }] },
+    { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#212a37" }] },
+    { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#9ca5b3" }] },
+    { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#746855" }] },
+    { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#1f2835" }] },
+    { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#f3d19c" }] },
+    { featureType: "water", elementType: "geometry", stylers: [{ color: "#17263c" }] },
+    { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#515c6d" }] },
+    { featureType: "water", elementType: "labels.text.stroke", stylers: [{ color: "#17263c" }] }
+  ];
+
+  const getMarkerIcon = (severity: string) => {
+    switch (severity) {
+      case 'high': return 'http://maps.google.com/mapfiles/ms/icons/red-dot.png';
+      case 'medium': return 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png';
+      case 'low': return 'http://maps.google.com/mapfiles/ms/icons/green-dot.png';
+      default: return 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png';
+    }
+  };
 
   // --- Auth & Data ---
 
@@ -336,6 +395,13 @@ export default function App() {
 
   const submitReport = async () => {
     if (!user || (!detection && !location && !capturedImage)) return; // Ensure at least user is defined, but we'll provide defaults
+    
+    // Attempt real geo location for Map centering
+    if (!location) {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      });
+    }
     
     const path = 'reports';
     try {
@@ -642,113 +708,93 @@ export default function App() {
                 <p className="text-stone-400 text-sm font-medium">Real-time damage clustering</p>
               </div>
 
-              <div className="bg-stone-950 rounded-[3rem] aspect-square relative overflow-hidden shadow-2xl border-8 border-white">
-                {/* Simulated Map Grid */}
-                <div className="absolute inset-0 grid grid-cols-12 grid-rows-12 opacity-10">
-                  {Array.from({ length: 144 }).map((_, i) => (
-                    <div key={i} className="border-[0.5px] border-emerald-500" />
-                  ))}
-                </div>
-                
-                {/* Radar Scan Effect */}
-                <motion.div 
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
-                  className="absolute inset-0 bg-gradient-to-tr from-emerald-500/5 to-transparent origin-center"
-                />
-
-                {reports.map((r) => (
-                  <motion.div 
-                    key={r.id}
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center cursor-pointer z-10"
-                    style={{ 
-                      left: `${((r.location.lng + 180) % 1) * 100}%`, 
-                      top: `${((r.location.lat + 90) % 1) * 100}%` 
-                    }}
-                    onClick={() => setSelectedMarker(r)}
+              <div className="bg-stone-950 rounded-[3rem] aspect-square relative overflow-hidden shadow-2xl border-8 border-white p-0">
+                {!isMapLoaded ? (
+                  <div className="absolute inset-0 flex items-center justify-center text-white">Loading Map...</div>
+                ) : (
+                  <GoogleMap
+                    mapContainerStyle={{ width: '100%', height: '100%' }}
+                    center={location ? location : { lat: 40.7128, lng: -74.0060 }} // Default NY if no nav
+                    zoom={13}
+                    options={{ styles: mapStyles, disableDefaultUI: true, zoomControl: true }}
+                    onLoad={(map) => { mapRef.current = map; }}
                   >
-                    <div className={cn(
-                      "absolute inset-0 rounded-full animate-ping opacity-20",
-                      r.severity === 'high' ? 'bg-red-500' : r.severity === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
-                    )} />
-                    <div className={cn(
-                      "w-4 h-4 rounded-full shadow-[0_0_15px_rgba(0,0,0,0.5)] border-2 border-white transition-transform hover:scale-125",
-                      r.severity === 'high' ? 'bg-red-500' : r.severity === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
-                    )} />
-                  </motion.div>
-                ))}
+                    <MarkerClusterer>
+                      {(clusterer) => (
+                        <>
+                          {reports.map((r) => (
+                            <Marker
+                              key={r.id}
+                              position={{ lat: r.location.lat, lng: r.location.lng }}
+                              icon={{
+                                url: getMarkerIcon(r.severity),
+                                scaledSize: new window.google.maps.Size(32, 32)
+                              }}
+                              clusterer={clusterer}
+                              onClick={() => setSelectedMarker(r)}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </MarkerClusterer>
 
-                {/* Marker Popup */}
-                <AnimatePresence>
-                  {selectedMarker && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10, scale: 0.9 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className="absolute z-50 -translate-x-1/2 -translate-y-[110%]"
-                      style={{ 
-                        left: `${((selectedMarker.location.lng + 180) % 1) * 100}%`, 
-                        top: `${((selectedMarker.location.lat + 90) % 1) * 100}%` 
-                      }}
-                    >
-                      <div className="bg-white rounded-2xl shadow-2xl border border-stone-200 p-3 w-56 relative group">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setSelectedMarker(null); }}
-                          className="absolute -top-2 -right-2 bg-stone-900 text-white p-1 rounded-full hover:bg-stone-700 transition-colors z-10"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                        
-                        <div className="relative h-24 mb-2 overflow-hidden rounded-xl">
-                          <img 
-                            src={selectedMarker.imageUrl} 
-                            alt={selectedMarker.type}
-                            className="w-full h-full object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute top-2 left-2">
-                             <SeverityBadge severity={selectedMarker.severity} />
+                    {selectedMarker && (
+                      <InfoWindow
+                        position={{ lat: selectedMarker.location.lat, lng: selectedMarker.location.lng }}
+                        onCloseClick={() => setSelectedMarker(null)}
+                        options={{ pixelOffset: new window.google.maps.Size(0, -35) }}
+                      >
+                        <div className="w-56 p-1 text-stone-900">
+                          <div className="relative h-32 mb-3 overflow-hidden rounded-xl">
+                            <img 
+                              src={selectedMarker.imageUrl} 
+                              alt={selectedMarker.type}
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute top-2 left-2">
+                               <SeverityBadge severity={selectedMarker.severity} />
+                            </div>
                           </div>
-                        </div>
-                        
-                        <h4 className="font-bold text-stone-900 text-sm mb-1 capitalize truncate">
-                          {selectedMarker.type}
-                        </h4>
-                        
-                        <div className="flex items-center gap-1 text-stone-500 mb-3">
-                          <MapIcon className="w-3 h-3" />
-                          <span className="text-[10px] font-mono">
-                            {selectedMarker.location.lat.toFixed(4)}, {selectedMarker.location.lng.toFixed(4)}
-                          </span>
-                        </div>
-                        
-                        {(selectedMarker.reportedBy === user?.uid || profile?.role === 'authority') && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteReport(selectedMarker.id);
-                            }}
-                            className="w-full py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors border border-red-100"
-                          >
-                            Delete Report
-                          </button>
-                        )}
-                        
-                        {/* Custom Pointer Arrow */}
-                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white border-b border-r border-stone-200 rotate-45" />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                          
+                          <h4 className="font-bold text-base mb-1 capitalize truncate">
+                            {selectedMarker.type}
+                          </h4>
+                          
+                          <div className="flex items-center gap-2 text-stone-500 mb-2">
+                            <MapIcon className="w-3.5 h-3.5" />
+                            <span className="text-xs font-mono">
+                              {selectedMarker.location.lat.toFixed(4)}, {selectedMarker.location.lng.toFixed(4)}
+                            </span>
+                          </div>
 
-                <div className="absolute top-6 right-6 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-black text-white uppercase tracking-widest">Live Feed</span>
-                </div>
+                          <div className="flex items-center gap-2 text-stone-500 mb-4">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span className="text-xs">
+                              {selectedMarker.timestamp?.toDate().toLocaleString()}
+                            </span>
+                            <span className="mx-1">•</span>
+                            <span className="text-xs capitalize font-semibold">{selectedMarker.status}</span>
+                          </div>
+                          
+                          {(selectedMarker.reportedBy === user?.uid || profile?.role === 'authority') && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteReport(selectedMarker.id);
+                              }}
+                              className="w-full py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-sm font-bold transition-colors border border-red-100"
+                            >
+                              Delete Report
+                            </button>
+                          )}
+                        </div>
+                      </InfoWindow>
+                    )}
+                  </GoogleMap>
+                )}
 
-                <div className="absolute bottom-8 left-8 right-8 bg-white/10 backdrop-blur-xl p-6 rounded-[2rem] border border-white/20 text-white">
+                <div className="absolute bottom-8 left-8 right-8 bg-white/10 backdrop-blur-xl p-6 rounded-[2rem] border border-white/20 text-white pointer-events-none">
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-xs font-black uppercase tracking-widest opacity-80">Infrastructure Health</p>
                     <Shield className="w-4 h-4 text-emerald-400" />
