@@ -34,6 +34,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { 
@@ -206,6 +207,7 @@ export default function App() {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [activeAlert, setActiveAlert] = useState<Report | null>(null);
+  const [selectedMarker, setSelectedMarker] = useState<Report | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -380,6 +382,31 @@ export default function App() {
       await updateDoc(doc(db, 'reports', reportId), { status: newStatus });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  };
+
+  const deleteReport = async (reportId: string) => {
+    const reportToDelete = reports.find(r => r.id === reportId);
+    if (!reportToDelete) return;
+    
+    // Only allow deletion if user created the report OR user is an authority
+    if (reportToDelete.reportedBy !== user?.uid && profile?.role !== 'authority') {
+      console.error("Unauthorized to delete this report");
+      return;
+    }
+
+    const path = `reports/${reportId}`;
+    try {
+      // Delete document from Firestore
+      await deleteDoc(doc(db, path));
+      
+      // Remove marker from map UI (optimistic update before snapshot catches it)
+      if (selectedMarker?.id === reportId) {
+        setSelectedMarker(null);
+      }
+      setReports(prev => prev.filter(r => r.id !== reportId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
     }
   };
 
@@ -635,22 +662,86 @@ export default function App() {
                     key={r.id}
                     initial={{ scale: 0, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center"
+                    className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center cursor-pointer z-10"
                     style={{ 
                       left: `${((r.location.lng + 180) % 1) * 100}%`, 
                       top: `${((r.location.lat + 90) % 1) * 100}%` 
                     }}
+                    onClick={() => setSelectedMarker(r)}
                   >
                     <div className={cn(
                       "absolute inset-0 rounded-full animate-ping opacity-20",
                       r.severity === 'high' ? 'bg-red-500' : r.severity === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
                     )} />
                     <div className={cn(
-                      "w-3 h-3 rounded-full shadow-[0_0_15px_rgba(0,0,0,0.5)] border-2 border-white",
+                      "w-4 h-4 rounded-full shadow-[0_0_15px_rgba(0,0,0,0.5)] border-2 border-white transition-transform hover:scale-125",
                       r.severity === 'high' ? 'bg-red-500' : r.severity === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
                     )} />
                   </motion.div>
                 ))}
+
+                {/* Marker Popup */}
+                <AnimatePresence>
+                  {selectedMarker && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      className="absolute z-50 -translate-x-1/2 -translate-y-[110%]"
+                      style={{ 
+                        left: `${((selectedMarker.location.lng + 180) % 1) * 100}%`, 
+                        top: `${((selectedMarker.location.lat + 90) % 1) * 100}%` 
+                      }}
+                    >
+                      <div className="bg-white rounded-2xl shadow-2xl border border-stone-200 p-3 w-56 relative group">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setSelectedMarker(null); }}
+                          className="absolute -top-2 -right-2 bg-stone-900 text-white p-1 rounded-full hover:bg-stone-700 transition-colors z-10"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                        
+                        <div className="relative h-24 mb-2 overflow-hidden rounded-xl">
+                          <img 
+                            src={selectedMarker.imageUrl} 
+                            alt={selectedMarker.type}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 left-2">
+                             <SeverityBadge severity={selectedMarker.severity} />
+                          </div>
+                        </div>
+                        
+                        <h4 className="font-bold text-stone-900 text-sm mb-1 capitalize truncate">
+                          {selectedMarker.type}
+                        </h4>
+                        
+                        <div className="flex items-center gap-1 text-stone-500 mb-3">
+                          <MapIcon className="w-3 h-3" />
+                          <span className="text-[10px] font-mono">
+                            {selectedMarker.location.lat.toFixed(4)}, {selectedMarker.location.lng.toFixed(4)}
+                          </span>
+                        </div>
+                        
+                        {(selectedMarker.reportedBy === user?.uid || profile?.role === 'authority') && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteReport(selectedMarker.id);
+                            }}
+                            className="w-full py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors border border-red-100"
+                          >
+                            Delete Report
+                          </button>
+                        )}
+                        
+                        {/* Custom Pointer Arrow */}
+                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white border-b border-r border-stone-200 rotate-45" />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 <div className="absolute top-6 right-6 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
