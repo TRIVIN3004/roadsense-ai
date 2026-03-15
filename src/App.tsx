@@ -215,8 +215,11 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [activeAlert, setActiveAlert] = useState<Report | null>(null);
   const [selectedMarker, setSelectedMarker] = useState<Report | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isCameraStarting, setIsCameraStarting] = useState(false);
 
-  // --- Maps Setup ---
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const { isLoaded: isMapLoaded } = useLoadScript({
     googleMapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || "", // Ensure you have this in your .env
     libraries: ['visualization']
@@ -357,18 +360,47 @@ export default function App() {
 
   const startCamera = async () => {
     setIsCapturing(true);
+    setCameraError(null);
+    setIsCameraStarting(true);
+    
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Camera API is not supported in this browser or environment.");
       }
-      // Get location
-      navigator.geolocation.getCurrentPosition((pos) => {
-        setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
       });
-    } catch (err) {
-      console.error("Camera error", err);
-      setIsCapturing(false);
+      
+      // Wait a tick for the React DOM to render the <video> element if it just toggled isCapturing
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+             videoRef.current?.play().catch(e => console.error("Video play error:", e));
+             setIsCameraStarting(false);
+          };
+        } else {
+           throw new Error("Video reference not found");
+        }
+      }, 100);
+
+      // Get location silently
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          (err) => console.warn("Location permission denied", err),
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      }
+    } catch (err: any) {
+      console.error("Camera initialization error:", err);
+      let errMsg = "Failed to access camera.";
+      if (err.name === 'NotAllowedError') errMsg = "Camera permission was denied.";
+      if (err.name === 'NotFoundError') errMsg = "No camera device was found.";
+      if (err.name === 'NotReadableError') errMsg = "Camera is already in use by another application.";
+      setCameraError(errMsg);
+      setIsCameraStarting(false);
     }
   };
 
@@ -435,10 +467,20 @@ export default function App() {
   };
 
   const resetCapture = () => {
+    
+    // Safety stop any active tracks when closing overlay
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    
     setIsCapturing(false);
     setDetection(null);
     setCapturedImage(null);
     setLoading(false);
+    setCameraError(null);
+    setIsCameraStarting(false);
   };
 
   const updateStatus = async (reportId: string, newStatus: string) => {
@@ -994,31 +1036,58 @@ export default function App() {
             
             {!capturedImage ? (
               <>
-                <video 
-                  ref={videoRef} 
-                  autoPlay 
-                  playsInline 
-                  className="flex-1 object-cover"
-                />
-                <DetectionHUD />
+                {isCameraStarting && !cameraError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white z-10 bg-black">
+                     <RefreshCw className="w-10 h-10 animate-spin text-emerald-500 mb-4" />
+                     <p className="font-bold tracking-widest uppercase text-xs opacity-70">Initializing Optics...</p>
+                  </div>
+                )}
                 
-                <div className="absolute bottom-16 left-0 right-0 flex items-center justify-center gap-10">
-                  <button 
-                    onClick={resetCapture}
-                    className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-xl flex items-center justify-center text-white border border-white/10 hover:bg-white/20 transition-all"
-                  >
-                    <X className="w-7 h-7" />
-                  </button>
-                  <button 
-                    onClick={captureAndDetect}
-                    className="w-24 h-24 rounded-full border-4 border-white flex items-center justify-center p-1.5 shadow-2xl shadow-white/20 active:scale-90 transition-transform"
-                  >
-                    <div className="w-full h-full bg-white rounded-full flex items-center justify-center">
-                      <div className="w-12 h-12 rounded-full border-2 border-stone-200" />
+                {cameraError ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 z-10 bg-black">
+                     <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mb-6">
+                       <AlertTriangle className="w-8 h-8" />
+                     </div>
+                     <h3 className="text-xl font-bold text-white mb-2">Camera Unavailable</h3>
+                     <p className="text-stone-400 text-sm mb-8">{cameraError}</p>
+                     <button 
+                       onClick={resetCapture} 
+                       className="px-6 py-3 bg-white text-black rounded-xl font-bold uppercase tracking-wider text-xs"
+                     >
+                       Return to Dashboard
+                     </button>
+                  </div>
+                ) : (
+                  <>
+                    <video 
+                      ref={videoRef} 
+                      autoPlay 
+                      playsInline 
+                      muted
+                      className="flex-1 object-cover w-full h-full"
+                    />
+                    <DetectionHUD />
+                    
+                    <div className="absolute bottom-16 left-0 right-0 flex items-center justify-center gap-10 z-20">
+                      <button 
+                        onClick={resetCapture}
+                        className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-xl flex items-center justify-center text-white border border-white/10 hover:bg-white/20 transition-all"
+                      >
+                        <X className="w-7 h-7" />
+                      </button>
+                      <button 
+                        onClick={captureAndDetect}
+                        disabled={isCameraStarting}
+                        className="w-24 h-24 rounded-full border-4 border-white flex items-center justify-center p-1.5 shadow-2xl shadow-white/20 active:scale-90 transition-transform disabled:opacity-50 disabled:active:scale-100"
+                      >
+                        <div className="w-full h-full bg-white rounded-full flex items-center justify-center">
+                          <div className="w-12 h-12 rounded-full border-2 border-stone-200" />
+                        </div>
+                      </button>
+                      <div className="w-14 h-14" />
                     </div>
-                  </button>
-                  <div className="w-14 h-14" />
-                </div>
+                  </>
+                )}
               </>
             ) : (
               <div className="flex-1 flex flex-col bg-stone-950">
